@@ -18,6 +18,15 @@ u32 emmc_keyY[4] = {0x0AB9DC76,0xBD4DC4D3,0x202DDD1D,0xE1A00005};
 u8 block[0x10];
 int i;
 
+static const char*
+	s_PubkeyNtrboot = 
+		"cc987b417d9d7c800285db10998cd4a7867aefda43a96d0b55b010736799c2d9f072d6fb1da6179a778987e7e8c8c08636bf5d2cd75a1feae04f66c783a833f493739e3a9770525e3d9d0eed504fd65fc4367191c41681cacf924ead1c3270dc58e58989a36a094390f3f18e404fb7f1687f30f76d008a9cd487254a98c9662f"
+	, * s_PubkeyNand =
+		"f1f51aff66f9b3694dcb78deaf311b783c072aac943011114a1cf6fe62b091b5ef0eba3aa9ec3ea01c5df666653e18df22533bd5e8d6ff58970b24e886fa878b62669924a8fa87f274004fea2ff623e1f2907ca4671fca283e86b6cac546a79c75c80feb32882c3d1df7d5dc1a1998e9f626d4fc76cb231358cb43a9b3cba3c5"
+	, * s_PubkeySpi =
+		"b85f0fdb262c1afcf86e37a7cdd211d455203ca8fb106edec7036ed7d6363b6633f4d6275865b632b9277a74ce1d41dbd96a0486ee7271b38673a03b8348627b22a20b7738dd027376c4f8523dea5c6f5df262e45f7a901c16a18cff0588862e1c826276c8ac7987f0a1d57d9399d5cd5d48554d30315dc1b15a324511f911cb"
+	;
+
 typedef struct __attribute__((__packed__)) 
 {
         u8  status;
@@ -127,7 +136,7 @@ int decryptsrl(u8 *srl)
 	return 0;
 }
 
-void decrypt_boot2_section(u8* data, u32 len, bool is3DS)
+void decrypt_boot2_section(u8* data, u32 len, bool is3DS, bool isNtrboot, u8* keyY)
 {
     u8 normalkey[16] = {0};
     u8 keyX_TWLFIRM[16] = {0xE1, 0xEB, 0xDF, 0x44, 0xAB, 0x1D, 0x81, 0xE3, 0x93, 0x9A, 0x4A, 0xB5, 0x36, 0xFC, 0x3A, 0x0E};
@@ -140,6 +149,8 @@ void decrypt_boot2_section(u8* data, u32 len, bool is3DS)
     int i;
 
     dsi_context dsictx;
+    if (keyY != NULL) memcpy(keyY_DSi, keyY, 16);
+    
     if(is3DS == true)
         F_XY((u32*) normalkey, (u32*)keyX_TWLFIRM, (u32*)keyY_3DS);
     else
@@ -161,45 +172,85 @@ void decrypt_boot2_section(u8* data, u32 len, bool is3DS)
        dsi_crypt_ctr_block(&dsictx, data+i, data+i);
 }
 
-void decrypt_boot2(char* in, bool is3DS)
+void decrypt_boot2(char* in, bool is3DS, bool isNtrboot)
 {
     u32 offset;
     u32 len;
     u8* data;
-    FILE* f_in = fopen(in,"r+b");
+    //u8 signedData[
+    FILE* f_in = fopen(in,"rb");
     FILE* f_out;
+    u32 arm9_offset = isNtrboot ? 0x20 : 0x220;
+    u32 arm7_offset = isNtrboot ? 0x30 : 0x230;
     if(f_in == NULL)
     {
-        printf("Input filename invalid!");
+        printf("Input filename invalid!\n");
         return;
+    }
+   
+    // get the keyY from the signature
+    u8 signature[0x80];
+    u8 message[0x80];
+    const char* pubkey = NULL;
+    u8* keyY = NULL;
+    if (!is3DS) {
+        static const u8 s_MessagePadding[] = { 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0 };
+        if (isNtrboot) {
+            pubkey = s_PubkeyNtrboot;
+            fseek(f_in, 0x100, SEEK_SET);
+            fread(signature, 1, sizeof(signature), f_in);
+            dsi_rsa_signature_decrypt(pubkey, signature, message);
+            if (memcmp(message, s_MessagePadding, sizeof(s_MessagePadding)) != 0) {
+                printf("Signature invalid!\n");
+                return;
+            }
+        } else {
+            pubkey = s_PubkeyNand;
+            fseek(f_in, 0x300, SEEK_SET);
+            fread(signature, 1, sizeof(signature), f_in);
+            dsi_rsa_signature_decrypt(pubkey, signature, message);
+            if (memcmp(message, s_MessagePadding, sizeof(s_MessagePadding)) != 0) {
+                pubkey = s_PubkeySpi;
+                dsi_rsa_signature_decrypt(pubkey, signature, message);
+                if (memcmp(message, s_MessagePadding, sizeof(s_MessagePadding)) != 0) {
+                    printf("Signature invalid!\n");
+                    return;
+                }
+            }
+        }
+        keyY = &message[sizeof(s_MessagePadding)];
+        printf("KeyY:\n");
+        hexdump(keyY,16);
     }
     
     // decrypt and write ARM9
     f_out = fopen("arm9.bin","wb");
-    fseek(f_in, 0x220, SEEK_SET);
+    fseek(f_in, arm9_offset, SEEK_SET);
     fread(&offset, 1, sizeof(offset), f_in);
-    fseek(f_in, 0x22C, SEEK_SET);
+    fseek(f_in, arm9_offset + 0xC, SEEK_SET);
     fread(&len, 1, sizeof(len), f_in);
+    printf("arm9: offset=%x, len=%x\n", offset, len);
     
     fseek(f_in, offset, SEEK_SET);
     data = malloc(len);
     fread(data, 1, len, f_in);
-    decrypt_boot2_section(data, len, is3DS);
+    decrypt_boot2_section(data, len, is3DS, isNtrboot, keyY);
     fwrite(data, 1, len, f_out);
     free(data);
     fclose(f_out);
     
     // decrypt and write ARM7
     f_out = fopen("arm7.bin","wb");
-    fseek(f_in, 0x230, SEEK_SET);
+    fseek(f_in, arm7_offset, SEEK_SET);
     fread(&offset, 1, sizeof(offset), f_in);
-    fseek(f_in, 0x23C, SEEK_SET);
+    fseek(f_in, arm7_offset + 0xC, SEEK_SET);
     fread(&len, 1, sizeof(len), f_in);
+    printf("arm7: offset=%x, len=%x\n", offset, len);
     
     fseek(f_in, offset, SEEK_SET);
     data = malloc(len);
     fread(data, 1, len, f_in);
-    decrypt_boot2_section(data, len, is3DS);
+    decrypt_boot2_section(data, len, is3DS, isNtrboot, keyY);
     fwrite(data, 1, len, f_out);
     fclose(f_out);
     fclose(f_in);
@@ -720,6 +771,7 @@ void display_help()
     printf("boot2: decrypt boot2 image to arm7.bin and arm9.bin\n");
     printf("  --in [infile]                 Input image\n");
     printf("  --debug                       Crypt debug boot2 (devkits, TWL_FIRM, ...)\n");
+    printf("  --ntrboot                     Crypt ntrboot image\n");
     printf("syscrypt: crypt system files with ES block crypto (dev.kp, tickets, ...)\n");
     printf("  --in [infile]                 Input SRL\n");
     printf("  --out [outfile]               Output file (optional)\n");
@@ -737,7 +789,7 @@ int main(int argc, char* argv[])
     char in[400] = {0};
     char out[400] = {0};
     char cidfile[400] = {0};
-    bool is3DS = false;
+    bool is3DS = false, isNtrboot = false;
     bool brute_cid = false;
     bool isN3DS = false;
     bool encrypt = false;
@@ -835,13 +887,16 @@ int main(int argc, char* argv[])
                 if(!strcmp(argv[i],"--debug")) {
                     is3DS = 1;
                 }
+                if(!strcmp(argv[i],"--ntrboot")) {
+                    isNtrboot = 1;
+                }
             }
             if(in[0] == 0) {
                 printf("Invalid filename!\n");
                 display_help();
                 exit(EXIT_FAILURE);
             }
-            decrypt_boot2(in, is3DS);
+            decrypt_boot2(in, is3DS, isNtrboot);
         }
         else if(!strcmp(argv[1], "syscrypt"))
         {

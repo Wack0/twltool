@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "polarssl/rsa.h"
+
 void dsi_set_key( dsi_context* ctx,
 				 unsigned char key[16] )
 {
@@ -370,4 +372,13 @@ void dsi_es_encrypt( dsi_es_context* ctx,
 
 	memcpy(metablock, mac, 16);
 
+}
+
+void dsi_rsa_signature_decrypt(const char * modulus, const unsigned char* signature, unsigned char* message) {
+	rsa_context rsa;
+	rsa_init(&rsa, RSA_PKCS_V15, 0);
+	rsa.len = 128;
+	mpi_read_string(&rsa.N, 16, modulus);
+	mpi_read_string(&rsa.E, 16, "10001");
+	rsa_public(&rsa, signature, message);
 }

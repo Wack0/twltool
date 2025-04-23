@@ -97,6 +97,8 @@ void		dsi_es_encrypt( dsi_es_context* ctx,
 						    unsigned char metablock[32],
 							unsigned int size );
 
+void dsi_rsa_signature_decrypt(const char * modulus, const unsigned char* signature, unsigned char* message);
+
 #ifdef __cplusplus
 }
 #endif
