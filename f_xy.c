@@ -165,35 +165,36 @@ void F_XY(uint32_t *key, uint32_t *key_x, uint32_t *key_y)
 {
 	int i;
 	unsigned char key_xy[16];
+	uint64_t k[2], xy[2];
+	static const uint32_t kc[4] = {
+		0x1a4f3e79, 0x2a680f5f, 0x29590258, 0xfffefb4e
+	};
 
-	memset(key_xy, 0, 16);
-	memset(key, 0, 16);
 	for(i=0; i<16; i++)key_xy[i] = ((unsigned char*)key_x)[i] ^ ((unsigned char*)key_y)[i];
 
-	key[0] = 0x1a4f3e79;
-	key[1] = 0x2a680f5f;
-	key[2] = 0x29590258;
-	key[3] = 0xfffefb4e;
+	memcpy(k, kc, 16);
+	memcpy(xy, key_xy, 16);
 
-	n128_add((uint64_t*)key, (uint64_t*)key_xy);
-	n128_lrot((uint64_t*)key, 42);
+	n128_add(k, xy);
+	n128_lrot(k, 42);
+
+	memcpy(key, k, 16);
 }
 
 //F_XY_reverse does the reverse of F(X^Y): takes (normal)key, and does F in reverse to generate the original X^Y key_xy.
 void F_XY_reverse(uint32_t *key, uint32_t *key_xy)
 {
-	uint32_t tmpkey[4];
-	memset(key_xy, 0, 16);
-	memset(tmpkey, 0, 16);
-	memcpy(tmpkey, key, 16);
+	uint64_t tk[2], ky[2];
+	static const uint32_t kc[4] = {
+		0x1a4f3e79, 0x2a680f5f, 0x29590258, 0xfffefb4e
+	};
 
-	key_xy[0] = 0x1a4f3e79;
-	key_xy[1] = 0x2a680f5f;
-	key_xy[2] = 0x29590258;
-	key_xy[3] = 0xfffefb4e;
+	memcpy(tk, key, 16);
+	memcpy(ky, kc, 16);
 
-	n128_rrot((uint64_t*)tmpkey, 42);
-	n128_sub((uint64_t*)tmpkey, (uint64_t*)key_xy);
-	memcpy(key_xy, tmpkey, 16);
+	n128_rrot(tk, 42);
+	n128_sub(tk, ky);
+
+	memcpy(key_xy, tk, 16);
 }
 
